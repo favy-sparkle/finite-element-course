@@ -3,8 +3,9 @@ from .reference_elements import ReferenceInterval, ReferenceTriangle
 
 np.seterr(invalid="ignore", divide="ignore")
 
+
 def lagrange_points(cell, degree):
-    # integer index tuples with x varying fastest: (0,0), (1,0), ..., (0,1), ...
+    # integer index tuples with x varying fastest
     idx = [i[::-1] for i in np.ndindex(*(degree + 1,) * cell.dim)
            if sum(i) <= degree]
 
@@ -12,14 +13,17 @@ def lagrange_points(cell, degree):
         b = (degree - sum(i),) + tuple(i)  # barycentric coordinates
         nonzero = [k for k, x in enumerate(b) if x != 0]
         zero = [k for k, x in enumerate(b) if x == 0]
-        if len(nonzero) == 1:   # vertex: ordered by which coordinate is nonzero
-            return (1, nonzero[0])
-        if zero:                # edge: grouped by the zero coordinate (opposite vertex)
-            return (len(nonzero), zero[0])
-        return (len(nonzero), 0)  # interior
+        if len(nonzero) == 1:   # vertex
+            return (1, nonzero[0], 0)
+        if zero:                # edge: grouped by the zero coordinate
+            if len(nonzero) == 2 and zero[0] == 0:
+                return (2, 0, -i[0])   # edge 0 runs from (1,0) to (0,1)
+            return (len(nonzero), zero[0], 0)
+        return (len(nonzero), 0, 0)    # interior
 
-    idx.sort(key=key)  # sort is stable, so the order within each group is kept
+    idx.sort(key=key)
     return np.array(idx) / degree
+
 
 def vandermonde_matrix(cell, degree, points, grad=False):
     points = np.asarray(points)
@@ -42,7 +46,7 @@ def vandermonde_matrix(cell, degree, points, grad=False):
         return e[k] * monomial(e2)
 
     G = np.array([[dmonomial(e, k) for k in range(cell.dim)] for e in exps])
-    return G.transpose(2, 0, 1)  # (points, monomials, gradient component)
+    return G.transpose(2, 0, 1)
 
 
 class FiniteElement(object):
@@ -65,46 +69,17 @@ class FiniteElement(object):
         self.node_count = nodes.shape[0]
 
     def tabulate(self, points, grad=False):
-        """Evaluate the basis functions of this finite element at the points
-        provided.
+        """(keep the docstring as it was)"""
 
-        :param points: a list of coordinate tuples at which to
-            tabulate the basis.
-        :param grad: whether to return the tabulation of the basis or the
-            tabulation of the gradient of the basis.
-
-        :result: an array containing the value of each basis function
-            at each point. If `grad` is `True`, the gradient vector of
-            each basis vector at each point is returned as a rank 3
-            array. The shape of the array is (points, nodes) if
-            ``grad`` is ``False`` and (points, nodes, dim) if ``grad``
-            is ``True``.
-
-        The implementation of this method is left as an :ref:`exercise
-        <ex-tabulate>`.
-
-        """
-
-        return vandermonde_matrix(self.cell, self.degree, points) @ self.basis_coefs
+        V = vandermonde_matrix(self.cell, self.degree, points, grad)
+        if grad:
+            return np.einsum("ijk,jl->ilk", V, self.basis_coefs)
+        return V @ self.basis_coefs
 
     def interpolate(self, fn):
-        """Interpolate fn onto this finite element by evaluating it
-        at each of the nodes.
+        """(keep the docstring as it was)"""
 
-        :param fn: A function ``fn(X)`` which takes a coordinate
-           vector and returns a scalar value.
-
-        :returns: A vector containing the value of ``fn`` at each node
-           of this element.
-
-        The implementation of this method is left as an :ref:`exercise
-        <ex-interpolate>`.
-
-        """
-
-        nodes = lagrange_points(cell, degree)
-        # Use lagrange_points to obtain the set of nodes. ...
-        super(LagrangeElement, self).__init__(cell, degree, nodes)
+        return np.array([fn(x) for x in self.nodes])
 
     def __repr__(self):
         return "%s(%s, %s)" % (self.__class__.__name__, self.cell, self.degree)
@@ -112,17 +87,18 @@ class FiniteElement(object):
 
 class LagrangeElement(FiniteElement):
     def __init__(self, cell, degree):
-        """An equispaced Lagrange finite element.
-
-        :param cell: the :class:`~.reference_elements.ReferenceCell`
-            over which the element is defined.
-        :param degree: the
-            polynomial degree of the element. We assume the element
-            spans the complete polynomial space.
-
-        The implementation of this class is left as an :ref:`exercise
-        <ex-lagrange-element>`.
-        """
+        """(keep the docstring as it was)"""
 
         nodes = lagrange_points(cell, degree)
-        super(LagrangeElement, self).__init__(cell, degree, nodes)
+
+        def support(p):
+            b = (1 - p.sum(),) + tuple(p)  # barycentric coordinates
+            return {k for k, x in enumerate(b) if x > 1e-12}
+
+        entity_nodes = {
+            d: {i: [n for n, p in enumerate(nodes)
+                    if support(p) == set(cell.topology[d][i])]
+                for i in range(len(cell.topology[d]))}
+            for d in range(cell.dim + 1)
+        }
+        super(LagrangeElement, self).__init__(cell, degree, nodes, entity_nodes)
