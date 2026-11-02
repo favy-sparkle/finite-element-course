@@ -3,84 +3,63 @@ from .reference_elements import ReferenceInterval, ReferenceTriangle
 
 np.seterr(invalid="ignore", divide="ignore")
 
-
 def lagrange_points(cell, degree):
-    """Construct the locations of the equispaced Lagrange nodes on cell.
+    # integer index tuples with x varying fastest: (0,0), (1,0), ..., (0,1), ...
+    idx = [i[::-1] for i in np.ndindex(*(degree + 1,) * cell.dim)
+           if sum(i) <= degree]
 
-    :param cell: the :class:`~.reference_elements.ReferenceCell`
-    :param degree: the degree of polynomials for which to construct nodes.
+    def key(i):
+        b = (degree - sum(i),) + tuple(i)  # barycentric coordinates
+        nonzero = [k for k, x in enumerate(b) if x != 0]
+        zero = [k for k, x in enumerate(b) if x == 0]
+        if len(nonzero) == 1:   # vertex: ordered by which coordinate is nonzero
+            return (1, nonzero[0])
+        if zero:                # edge: grouped by the zero coordinate (opposite vertex)
+            return (len(nonzero), zero[0])
+        return (len(nonzero), 0)  # interior
 
-    :returns: a rank 2 :class:`~numpy.array` whose rows are the
-        coordinates of the nodes.
-
-    The implementation of this function is left as an :ref:`exercise
-    <ex-lagrange-points>`.
-
-    """
-
-    raise NotImplementedError
-
+    idx.sort(key=key)  # sort is stable, so the order within each group is kept
+    return np.array(idx) / degree
 
 def vandermonde_matrix(cell, degree, points, grad=False):
-    """Construct the generalised Vandermonde matrix for polynomials of the
-    specified degree on the cell provided.
+    points = np.asarray(points)
+    if cell.dim == 1:
+        exps = [(d,) for d in range(degree + 1)]
+    else:
+        exps = [(d - j, j) for d in range(degree + 1) for j in range(d + 1)]
 
-    :param cell: the :class:`~.reference_elements.ReferenceCell`
-    :param degree: the degree of polynomials for which to construct the matrix.
-    :param points: a list of coordinate tuples corresponding to the points.
-    :param grad: whether to evaluate the Vandermonde matrix or its gradient.
+    def monomial(e):
+        return np.prod(points ** np.array(e), axis=1)
 
-    :returns: the generalised :ref:`Vandermonde matrix <sec-vandermonde>`
+    if not grad:
+        return np.stack([monomial(e) for e in exps], axis=1)
 
-    The implementation of this function is left as an :ref:`exercise
-    <ex-vandermonde>`.
-    """
+    def dmonomial(e, k):
+        if e[k] == 0:
+            return np.zeros(len(points))
+        e2 = list(e)
+        e2[k] -= 1
+        return e[k] * monomial(e2)
 
-    raise NotImplementedError
+    G = np.array([[dmonomial(e, k) for k in range(cell.dim)] for e in exps])
+    return G.transpose(2, 0, 1)  # (points, monomials, gradient component)
 
 
 class FiniteElement(object):
     def __init__(self, cell, degree, nodes, entity_nodes=None):
-        """A finite element defined over cell.
+        """(keep the docstring as it was)"""
 
-        :param cell: the :class:`~.reference_elements.ReferenceCell`
-            over which the element is defined.
-        :param degree: the
-            polynomial degree of the element. We assume the element
-            spans the complete polynomial space.
-        :param nodes: a list of coordinate tuples corresponding to
-            point evaluation node locations on the element.
-        :param entity_nodes: a dictionary of dictionaries such that
-            entity_nodes[d][i] is the list of nodes associated with
-            entity `(d, i)` of dimension `d` and index `i`.
-
-        Most of the implementation of this class is left as exercises.
-        """
-
-        #: The :class:`~.reference_elements.ReferenceCell`
-        #: over which the element is defined.
         self.cell = cell
-        #: The polynomial degree of the element. We assume the element
-        #: spans the complete polynomial space.
         self.degree = degree
-        #: The list of coordinate tuples corresponding to the nodes of
-        #: the element.
         self.nodes = nodes
-        #: A dictionary of dictionaries such that ``entity_nodes[d][i]``
-        #: is the list of nodes associated with entity `(d, i)`.
         self.entity_nodes = entity_nodes
 
         if entity_nodes:
-            #: ``nodes_per_entity[d]`` is the number of nodes
-            #: associated with an entity of dimension d.
             self.nodes_per_entity = np.array(
                 [len(entity_nodes[d][0]) for d in range(cell.dim + 1)]
             )
 
-        # Replace this exception with some code which sets
-        # self.basis_coefs
-        # to an array of polynomial coefficients defining the basis functions.
-        raise NotImplementedError
+        self.basis_coefs = np.linalg.inv(vandermonde_matrix(cell, degree, nodes))
 
         #: The number of nodes in this element.
         self.node_count = nodes.shape[0]
@@ -106,7 +85,7 @@ class FiniteElement(object):
 
         """
 
-        raise NotImplementedError
+        return vandermonde_matrix(self.cell, self.degree, points) @ self.basis_coefs
 
     def interpolate(self, fn):
         """Interpolate fn onto this finite element by evaluating it
@@ -123,7 +102,9 @@ class FiniteElement(object):
 
         """
 
-        raise NotImplementedError
+        nodes = lagrange_points(cell, degree)
+        # Use lagrange_points to obtain the set of nodes. ...
+        super(LagrangeElement, self).__init__(cell, degree, nodes)
 
     def __repr__(self):
         return "%s(%s, %s)" % (self.__class__.__name__, self.cell, self.degree)
@@ -143,9 +124,5 @@ class LagrangeElement(FiniteElement):
         <ex-lagrange-element>`.
         """
 
-        raise NotImplementedError
-        # Use lagrange_points to obtain the set of nodes.  Once you
-        # have obtained nodes, the following line will call the
-        # __init__ method on the FiniteElement class to set up the
-        # basis coefficients.
+        nodes = lagrange_points(cell, degree)
         super(LagrangeElement, self).__init__(cell, degree, nodes)
